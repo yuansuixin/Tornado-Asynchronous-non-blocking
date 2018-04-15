@@ -1,9 +1,14 @@
 import socket
 import select
+import time
+
 
 '''
-所有同步的Web框架
+异步非阻塞Web框架
+请求超时的时候断开连接
+通过设置请求的超时来结束连接请求
 '''
+
 
 class HttpRequest(object):
     """
@@ -29,14 +34,12 @@ class HttpRequest(object):
         self.initialize_headers()
 
     def initialize(self):
+
         temp = self.content.split(b'\r\n\r\n', 1)
-        print(type(temp))
-        print(temp)
-        print(len(temp))
         if len(temp) == 1:
             self.header_bytes += temp
         else:
-            h, b = temp[0],temp[1]
+            h, b = temp
             self.header_bytes += h
             self.body_bytes += b
 
@@ -55,12 +58,14 @@ class HttpRequest(object):
                     k, v = kv
                     self.header_dict[k] = v
 
-# class Future(object):
-#     def __init__(self):
-#         self.result = None
-
+class Future(object):
+    def __init__(self,timeout=0):
+        self.result = None
+        self.timeout = timeout
+        self.start = time.time()
 def main(request):
-    return "main"
+    f = Future(5)
+    return f
 
 def index(request):
     return "indexasdfasdfasdf"
@@ -80,9 +85,13 @@ def run():
 
     inputs = []
     inputs.append(sock)
+
+    async_request_dict = {
+        # 'socket': futrue
+    }
+
     while True:
         rlist,wlist,elist = select.select(inputs,[],[],0.05)
-
         for r in rlist:
             if r == sock:
                 """新请求到来"""
@@ -116,13 +125,30 @@ def run():
                         break
                 if flag:
                     result = func(request)
-                    r.sendall(bytes(result,encoding='utf-8'))
+                    if isinstance(result,Future):
+                        async_request_dict[r] = result
+                    else:
+                        r.sendall(bytes(result,encoding='utf-8'))
+                        inputs.remove(r)
+                        r.close()
                 else:
                     r.sendall(b"404")
+                    inputs.remove(r)
+                    r.close()
 
-                inputs.remove(r)
-                r.close()
-
+        for conn in async_request_dict.keys():
+            future = async_request_dict[conn]
+            start = future.start
+            timeout = future.timeout
+            ctime = time.time()
+            # 判断是否超时
+            if (start + timeout) <= ctime :
+                future.result = b"timeout"
+            if future.result:
+                conn.sendall(future.result)
+                conn.close()
+                del async_request_dict[conn]
+                inputs.remove(conn)
 
 if __name__ == '__main__':
     run()

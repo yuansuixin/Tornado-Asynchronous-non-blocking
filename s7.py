@@ -2,7 +2,8 @@ import socket
 import select
 
 '''
-所有同步的Web框架
+自定义异步Web框架
+通过判断future对象中有无值来判断是否结束请求
 '''
 
 class HttpRequest(object):
@@ -27,16 +28,13 @@ class HttpRequest(object):
 
         self.initialize()
         self.initialize_headers()
-
+    # 处理请求信息
     def initialize(self):
         temp = self.content.split(b'\r\n\r\n', 1)
-        print(type(temp))
-        print(temp)
-        print(len(temp))
         if len(temp) == 1:
             self.header_bytes += temp
         else:
-            h, b = temp[0],temp[1]
+            h, b = temp
             self.header_bytes += h
             self.body_bytes += b
 
@@ -55,12 +53,23 @@ class HttpRequest(object):
                     k, v = kv
                     self.header_dict[k] = v
 
-# class Future(object):
-#     def __init__(self):
-#         self.result = None
+# 异步非阻塞最重要的成分
+class Future(object):
+    def __init__(self):
+        self.result = None
 
+
+F = None
 def main(request):
-    return "main"
+    global F
+    F = Future()
+    return F
+
+def stop(request):
+    global F
+    F.result = b"xxxxxxxxxxxxx"
+    return "stop"
+
 
 def index(request):
     return "indexasdfasdfasdf"
@@ -69,6 +78,7 @@ def index(request):
 routers = [
     ('/main/',main),
     ('/index/',index),
+    ('/stop/',stop),
 ]
 
 def run():
@@ -80,9 +90,14 @@ def run():
 
     inputs = []
     inputs.append(sock)
+
+    async_request_dict = {
+        # 'socket': futrue
+    }
+
     while True:
         rlist,wlist,elist = select.select(inputs,[],[],0.05)
-
+        # 只处理请求来时返回的内容，异步的时候将yield添加到列表中
         for r in rlist:
             if r == sock:
                 """新请求到来"""
@@ -116,13 +131,26 @@ def run():
                         break
                 if flag:
                     result = func(request)
-                    r.sendall(bytes(result,encoding='utf-8'))
+                    # 如果result是future对象，将socket写入到字典里，否则，做返回处理
+                    if isinstance(result,Future):
+                        async_request_dict[r] = result
+                    else:
+                        r.sendall(bytes(result,encoding='utf-8'))
+                        inputs.remove(r)
+                        r.close()
                 else:
                     r.sendall(b"404")
+                    inputs.remove(r)
+                    r.close()
 
-                inputs.remove(r)
-                r.close()
-
+        for conn in async_request_dict.keys():
+            future = async_request_dict[conn]
+            if future.result:
+                # future设置了值，那么请求结束，断开连接，并将连接删除，移除socket
+                conn.sendall(future.result)
+                conn.close()
+                del async_request_dict[conn]
+                inputs.remove(conn)
 
 if __name__ == '__main__':
     run()
